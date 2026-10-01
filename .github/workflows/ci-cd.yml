@@ -1,0 +1,68 @@
+name: CI/CD - Certify API
+
+on:
+  push:
+    branches: [main]
+
+env:
+  ACR_NAME: acrcertify${{ secrets.UNIQUE_SUFFIX }}
+  IMAGE_NAME: certifyapi
+  RESOURCE_GROUP: SUB-Utbildning-DotNetCloudDeveloper-2026-VT-Mars-Goteborg
+  CONTAINER_APP_NAME: ca-certify${{ secrets.UNIQUE_SUFFIX }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kod
+        uses: actions/checkout@v4
+
+      - name: Sätt upp .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Återställ paket
+        run: dotnet restore
+
+      - name: Bygg
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Kör tester
+        run: dotnet test --no-build --configuration Release
+
+  push-to-acr:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout kod
+        uses: actions/checkout@v4
+
+      - name: Logga in mot Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Logga in mot ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Bygg och pusha Docker-image
+        run: |
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy:
+    needs: push-to-acr
+    runs-on: ubuntu-latest
+    steps:
+      - name: Logga in mot Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Uppdatera Container App med ny image
+        run: |
+          az containerapp update \
+            --name ${{ env.CONTAINER_APP_NAME }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
